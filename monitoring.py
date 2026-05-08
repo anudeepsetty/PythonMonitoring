@@ -5,8 +5,8 @@ import sys
 from datetime import datetime,timezone
 from pathlib import Path
 
-SERVICES =["logstash"]
-OUTPUT_DIR = Path("/apps/c1/scripts")
+SERVICES =["logstash","httpd","rabbitMQ","postgreSQL"]
+OUTPUT_DIR = Path("/apps/c1/scripts/data/source")
 
 def is_service_up(name):
     result = subprocess.run(["systemctl","is-active", name],capture_output=True,text=True)
@@ -16,7 +16,8 @@ def build_payload(service_name,host_name):
     return{
             "service_name": service_name,
             "service_status": "UP" if is_service_up(service_name) else "DOWN",
-            "host_name": host_name
+            "host_name": host_name,
+            "@timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
 def write_payload(payload, out_dir):
