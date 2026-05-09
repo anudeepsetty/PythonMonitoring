@@ -11,7 +11,7 @@ PROCESSED_DIR = '/apps/c1/scripts/data/processed'
 ES_HOST = "http://localhost:9200"
 INDEX_NAME = "rbcapp_application_status"
 
-es = Elasticsearch("https://devlogs.es.elk.dev01.lv1.c1b.corp:9243",basic_auth=("metricCollector", "Link.360"), verify_certs=False)
+es = Elasticsearch("https://devlogs.corp:9243",basic_auth=("metricCollector", "Link.360"), verify_certs=False)
 
 
    # basic_auth=("metricCollector", "Link.360")
@@ -49,34 +49,30 @@ def trigger_add():
 
 @app.route('/healthcheck', methods=['GET'])
 def get_all_health():
-    """Return status of all services from latest data."""
-    # Query latest document for each service
+    """Return latest status for each service."""
     query = {
-                "size": 1000,
-                "query": {
-                    "match_all": {}
-                    },
-                "collapse": {
-                    "field": "service_name.keyword",
-                    "inner_hits": {
-                        "name": "latest_per_service",
-                        "size": 1,
-                        "sort": [
-                            { "@timestamp": { "order": "desc" } }
-                            ]
+        "size": 0,
+        "aggs": {
+            "latest_services": {
+                "terms": {"field": "service_name.keyword", "size": 100},
+                "aggs": {
+                    "latest_doc": {
+                        "top_hits": {
+                            "size": 1,
+                            "sort": [{"@timestamp": {"order": "desc"}}],
+                            "_source": ["service_status"]
                         }
-                    },
-                "sort": [
-                    { "service_name.keyword": "asc" }
-                    ]
+                    }
+                }
             }
+        }
+    }
 
     response = es.search(index=INDEX_NAME, body=query)
+
     results = {}
     for bucket in response['aggregations']['latest_services']['buckets']:
-        service_name = bucket['key']
-        latest_status = bucket['latest_doc']['hits']['hits'][0]['_source']['status']
-        results[service_name] = latest_status
+        results[bucket['key']] = bucket['latest_doc']['hits']['hits'][0]['_source']['service_status']
 
     return jsonify(results), 200
 
