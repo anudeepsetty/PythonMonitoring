@@ -1,0 +1,161 @@
+---
+# Usage examples:
+#   ansible-playbook assignment.yaml -i inventory -e action=verify_install
+#   ansible-playbook assignment.yaml -i inventory -e action=check-disk
+#   ansible-playbook assignment.yaml -i inventory -e action=check-status
+
+####################################################################
+# ACTION: verify_install
+# Check if each service is installed on its host.
+# If httpd is missing on host1, install it (used as the example).
+####################################################################
+
+- name: Verify services are installed
+  hosts: all
+  become: true
+  gather_facts: false
+  when: action == "verify_install"
+
+  tasks:
+
+    - name: Check if httpd is installed on host1
+      hosts: webservers
+      ansible.builtin.command: rpm -q httpd
+      register: httpd_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install httpd on host1 if missing
+      ansible.builtin.dnf:
+        name: httpd
+        state: present
+      when:
+        - inventory_hostname in groups['webservers']
+        - httpd_check.rc != 0
+
+    - name: Start and enable httpd after install
+      ansible.builtin.service:
+        name: httpd
+        state: started
+        enabled: true
+      when:
+        - inventory_hostname in groups['webservers']
+        - httpd_check.rc != 0
+
+    - name: Check if rabbitmq is installed on host2
+      ansible.builtin.command: rpm -q rabbitmq-server
+      register: rabbit_check
+      failed_when: false
+      changed_when: false
+      when: inventory_hostname in groups['messagebrokers']
+
+    - name: Check if postgresql is installed on host3
+      ansible.builtin.command: rpm -q postgresql-server
+      register: pg_check
+      failed_when: false
+      changed_when: false
+      when: inventory_hostname in groups['databases']
+
+    - name: Show httpd install status
+      ansible.builtin.debug:
+        msg: "httpd on host1 - {{ 'INSTALLED' if httpd_check.rc == 0 else 'NOT INSTALLED' }}"
+      when: inventory_hostname in groups['webservers']
+
+    - name: Show rabbitmq install status
+      ansible.builtin.debug:
+        msg: "rabbitmq on host2 - {{ 'INSTALLED' if rabbit_check.rc == 0 else 'NOT INSTALLED' }}"
+      when: inventory_hostname in groups['messagebrokers']
+
+    - name: Show postgresql install status
+      ansible.builtin.debug:
+        msg: "postgresql on host3 - {{ 'INSTALLED' if pg_check.rc == 0 else 'NOT INSTALLED' }}"
+      when: inventory_hostname in groups['databases']
+
+
+####################################################################
+# ACTION: check-disk
+# Check disk usage on all servers.
+# Send an alert email if any disk is over 80% full.
+####################################################################
+
+- name: Check disk space on all servers
+  hosts: all
+  become: true
+  gather_facts: false
+  when: action == "check-disk"
+
+  vars:
+    alert_email: anudeepsty@gmail.com
+
+  tasks:
+
+    - name: Get disk usage and find any filesystem over 80 percent
+      ansible.builtin.shell: |
+        df -h | awk 'NR>1 && int($5) > 80 {print $0}'
+      register: disk_result
+      changed_when: false
+
+    - name: Show disk is fine if nothing is over 80 percent
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: All disks are within normal usage."
+      when: disk_result.stdout == ""
+
+    - name: Show which disks are over 80 percent
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: HIGH DISK USAGE DETECTED!\n{{ disk_result.stdout }}"
+      when: disk_result.stdout != ""
+
+    - name: Send alert email if disk usage is high
+      community.general.mail:
+        host: localhost
+        port: 25
+        to: "{{ alert_email }}"
+        subject: "ALERT - High disk usage on {{ inventory_hostname }}"
+        body: |
+          High disk usage detected on {{ inventory_hostname }}.
+
+          Filesystems over 80% full:
+          {{ disk_result.stdout }}
+
+          Please investigate immediately.
+      delegate_to: localhost
+      when: disk_result.stdout != ""
+
+
+####################################################################
+# ACTION: check-status
+# Call the /healthcheck REST endpoint from the Flask app (TEST1).
+# Print the status of rbcapp1 and list any services that are down.
+####################################################################
+
+- name: Check rbcapp1 application status
+  hosts: localhost
+  gather_facts: false
+  when: action == "check-status"
+
+  vars:
+    flask_api: "http://localhost:40401"
+
+  tasks:
+
+    - name: Call the healthcheck endpoint
+      ansible.builtin.uri:
+        url: "{{ flask_api }}/healthcheck"
+        method: GET
+        return_content: true
+      register: api_response
+
+    - name: Show the full response from rbcapp1
+      ansible.builtin.debug:
+        msg: "rbcapp1 health response: {{ api_response.json }}"
+
+    - name: List each service and its status
+      ansible.builtin.debug:
+        msg: "Service: {{ item.key }}  |  Status: {{ item.value }}"
+      loop: "{{ api_response.json | dict2items }}"
+
+    - name: List services that are DOWN
+      ansible.builtin.debug:
+        msg: "DOWN SERVICE: {{ item.key }}"
+      loop: "{{ api_response.json | dict2items }}"
+      when: item.value != "UP"
