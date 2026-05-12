@@ -11,7 +11,7 @@ PROCESSED_DIR = '/apps/c1/scripts/data/processed'
 ES_HOST = "http://localhost:9200"
 INDEX_NAME = "rbcapp_application_status"
 
-es = Elasticsearch("https://devlogs.corp:9243",basic_auth=("metricCollector", "Link.360"), verify_certs=False)
+es = Elasticsearch(ES_HOST,basic_auth=("metricCollector", "Link.360"), verify_certs=False)
 
 
    # basic_auth=("metricCollector", "Link.360")
@@ -39,6 +39,19 @@ def process_json_files():
     return processed_files
 
 # --- Endpoints ---
+
+@app.route('/debug', methods=['GET'])
+def debug_dirs():
+    """Show resolved paths and their contents for troubleshooting."""
+    import glob
+    return jsonify({
+        "source_dir": SOURCE_DIR,
+        "source_dir_exists": os.path.isdir(SOURCE_DIR),
+        "source_files": os.listdir(SOURCE_DIR) if os.path.isdir(SOURCE_DIR) else [],
+        "json_files": glob.glob(os.path.join(SOURCE_DIR, "*.json")),
+        "processed_dir": PROCESSED_DIR,
+        "processed_dir_exists": os.path.isdir(PROCESSED_DIR),
+    }), 200
 
 @app.route('/add', methods=['POST'])
 def trigger_add():
@@ -70,11 +83,17 @@ def get_all_health():
 
     response = es.search(index=INDEX_NAME, body=query)
 
-    results = {}
+    services = {}
     for bucket in response['aggregations']['latest_services']['buckets']:
-        results[bucket['key']] = bucket['latest_doc']['hits']['hits'][0]['_source']['service_status']
+        services[bucket['key']] = bucket['latest_doc']['hits']['hits'][0]['_source']['service_status']
 
-    return jsonify(results), 200
+    rbc_application_status = "DOWN" if "DOWN" in services.values() else "UP"
+    http_status = 200 if rbc_application_status == "UP" else 503
+
+    return jsonify({
+        "rbc_application_status": rbc_application_status,
+        "services": services
+    }), http_status
 
 @app.route('/healthcheck/<serviceName>', methods=['GET'])
 def get_service_health(serviceName):
@@ -82,14 +101,14 @@ def get_service_health(serviceName):
     query = {
         "size": 1,
         "query": {
-            "term": { "serviceName.keyword": serviceName }
+            "term": { "service_name.keyword": serviceName }
         },
         "sort": [{"@timestamp": {"order": "desc"}}]
     }
 
     response = es.search(index=INDEX_NAME, body=query)
     if response['hits']['hits']:
-        status = response['hits']['hits'][0]['_source']['status']
+        status = response['hits']['hits'][0]['_source']['service_status']
         return jsonify({"serviceName": serviceName, "status": status}), 200
     else:
         return jsonify({"error": "Service not found"}), 404
